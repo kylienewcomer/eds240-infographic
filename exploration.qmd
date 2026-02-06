@@ -1,0 +1,146 @@
+---
+title: "exploration"
+author: "Kylie Newcomer"
+date: "2/4/2026"
+format: html
+execute:
+  warning: false
+  message: false
+  
+---
+
+```{r}
+library(tidyverse)
+library(here)
+
+subtidal <- read_csv(here("data", "ucsb_fish_clean_obs_1999-2024.csv"))
+taxon <- read_csv(here("data", "PISCO_kelpforest_taxon_table.1.3.csv")) %>% 
+  filter(campus == "UCSB")
+
+fish <- left_join(subtidal, taxon, by = "classcode") %>% 
+  select(year, site, side, zone, level, transect, classcode, fish_tl, depth, pctcnpy, count, Family, Genus, Species, common_name) %>% 
+  janitor::clean_names()
+
+```
+
+```{r}
+
+fish_clean <- fish %>% 
+  filter(!is.na(fish_tl)) %>%
+  group_by(site) %>% 
+  mutate(total_years = length(unique(year))) %>% # Calculate number of years each site was surveyed
+  ungroup() %>%
+  mutate(island = case_when( # Assign sites to respective islands
+    str_detect(pattern = "SRI", string = site) ~ "Santa Rosa", 
+    str_detect(pattern = "SCI", string = site) ~ "Santa Cruz",
+    str_detect(pattern = "SMI", string = site) ~ "San Miguel",
+    str_detect(pattern = "ANA", string = site) ~ "Anacapa",
+    TRUE ~ "remove"), 
+    level = factor(level, levels = c("CAN", "MID", "BOT"))) %>% # Refactor survey levels
+  filter(island != "remove", 
+         total_years >= 15,
+         year > 2005) %>% # Select only sites with >=15 years of surveys
+  select(-total_years)
+```
+
+
+```{r}
+# Calculate canopy averages at transect level
+kelp <- fish_clean %>% 
+  group_by(site, side, transect, year) %>% 
+  summarise(av_pctcnpy = round(mean(pctcnpy, na.rm = FALSE), digits = 0)) %>% 
+  ungroup() %>% 
+  mutate(cnpy_pct = case_when( # Bin percent canopy cover
+    av_pctcnpy <= 10 ~ "0-10",
+    av_pctcnpy <= 20 ~ "11-20",
+    av_pctcnpy <= 30 ~ "21-30",
+    av_pctcnpy <= 40 ~ "31-40",
+    av_pctcnpy <= 50 ~ "41-50",
+    av_pctcnpy <= 60 ~ "51-60",
+    av_pctcnpy <= 70 ~ "61-70",
+    av_pctcnpy <= 80 ~ "71-80",
+    av_pctcnpy <= 90 ~ "81-90",
+    TRUE ~ "91-100")
+  )
+
+fish_kelp <- left_join(fish_clean, kelp, by = join_by(site, side, transect, year)) # Attach bins to data
+
+```
+
+
+## Create summaries for visualizations
+```{r}
+# summarize by island and year
+# fish_sum_island <- fish_clean %>% 
+#   group_by(island, year, classcode) %>% 
+#   summarize(n_fish = sum(count), # total fish
+#             density = sum(row_biomass.kgt)) %>% 
+#   ungroup()
+
+# Summarize by genus at sites
+fish_sum_site <- fish_kelp %>% 
+  group_by(island, site, transect, year, classcode, cnpy_pct) %>% 
+  summarize(n_fish = sum(count), # total fish
+            density = sum((count * fish_tl))/(36*30)) %>% 
+  ungroup() 
+
+
+species_sums <- fish_kelp %>% 
+  group_by(family) %>% 
+  mutate(total_obs = n(),
+         total_counts = sum(count)) %>% 
+  ungroup() %>% 
+  mutate(fish_family = case_when(
+    total_counts >= 30000 ~ family,
+    TRUE ~ "Other"))
+
+```
+
+```{r}
+ggplot(fish_kelp, aes(av_pctcnpy, fill = island)) +
+  geom_histogram(position = "identity", alpha = 0.5) +
+  scale_fill_manual(values = c("hotpink", "darkorange", "darkblue", "forestgreen")) +
+  theme_light() +
+  labs(x = "Average canopy cover by transect (%)",
+       y = "Transect frequency",
+       title = "Kelp density distributions by island")
+  
+```
+
+
+```{r}
+ggplot(species_sums, aes(count, fish_family)) +
+  geom_col(fill = "darkblue") +
+  #scale_color_brewer(palette = "Set1") +
+  #scale_y_reverse() +
+  facet_wrap(~island) +
+  theme_light() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 10)) +
+  labs(x = "Total Observed Fish",
+       y = "",
+       title = "Fish Family Abundance by Island")
+
+
+```
+
+```{r}
+ggplot(species_sums, aes(cnpy_pct, count, fill = fish_family)) +
+  geom_col(position = "fill") +
+  scale_fill_brewer(palette = "Set1") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(y = "",
+       x = "Percent Kelp Canopy Cover",
+       title = "Proportion of Fish Families Under Varying Densities of Kelp Canopy",
+       fill = "Family") +
+  theme_light()
+```
+
+
+## Questions
+**1.** Based on my initial data visualizations, I've learned that Santa Cruz Island has the most sites and observations, but Anacapa Island has the highest densities of kelp. To understand how species abundance differ between islands, I looked at total of observed ish by Family across the islands. In doing this I noticed that Santa Cruz and Anacapa have the most observed fish, most likely because they have more surveyed sites than San Miguel and Santa Rosa. However, the distribution of species looks the most balanced at Santa Rosa. When visualizing the proportions of fish families in varying kelp densities I noticed that Embiotocidae (Perches) increased in proportion with increasing kelp density, while Pomacentridae (Damselfishes) had the highest proportion at the 0-10% kelp canopy cover. Overall I did not see super interesting trends, but wonder if looking at targeted species vs non-targeted under kelp cover would have some interesting results.
+
+**2.** I have not made many strides towards answering my questions of how species diversity and distribution varies under differing kelp canopy densities. Next I need to wrangle my data further to calculate density, and decide at which scale (transect, site, site and side, or island) I should be visualizing my data at. I also need to decide if I should focus on a single island to make my information easier to digest.
+
+**3.** Upon attempting to visualize proportions of Species (and Genus and Family) under varying kelp densities, I realized there are far too many species, and Genus and Families, to represent every one, so I am leaning towards the top 7 observed families and classifying remaining families into an "Other" category. I feel like this takes away from my idea to visualize changes in diversity, but I hope to find a way to either incorporate those species in a "rare observations" figure or something like that. Additionally, the "Canopy" level transects are not consistent and were not completed when the canopy density was less than 5%, so I will need to find a way to work around this. I feel slightly overwhelmed at the amount of data I have to make sense of and will need to put in a lot more work, and potentially reframe my questions to make this project doable.
+
